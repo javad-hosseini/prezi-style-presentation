@@ -1,0 +1,1419 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>از مفاهیم پایگاه داده تا ClickHouse - پرزنتیشن تعاملی</title>
+<style>
+/* RESET */
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden}
+body{
+  font-family:'Vazirmatn','Lalezar',Tahoma,'IRANSans',sans-serif;
+  background:var(--bg);
+  color:var(--fg);
+  transition:background 0.9s ease, color 0.9s ease;
+  overscroll-behavior:none;
+}
+h1,h2,h3{font-family:'Lalezar','Vazirmatn',Tahoma,sans-serif; line-height:1.15; letter-spacing:-0.5px}
+p,li,span,div{line-height:1.8}
+
+/* THEMES */
+body[data-theme="dark"]{
+  --bg:#070b14;
+  --fg:#e8eefc;
+  --acc:#7c5cff;
+  --acc2:#2ef5cc;
+  --line:#1a2440;
+  --card:#10192e;
+  --card2:#162040;
+  --muted:#8aa0c8;
+  --shadow:rgba(0,0,0,0.5);
+}
+body[data-theme="light"]{
+  --bg:#f5f7ff;
+  --fg:#0f172a;
+  --acc:#6d28d9;
+  --acc2:#0ea5e9;
+  --line:#dbe6ff;
+  --card:#ffffff;
+  --card2:#f1f5ff;
+  --muted:#64748b;
+  --shadow:rgba(15,23,42,0.12);
+}
+body[data-theme="accent"]{
+  --bg:#0f0a1f;
+  --fg:#f5f3ff;
+  --acc:#ff4ecd;
+  --acc2:#7c5cff;
+  --line:#2a184d;
+  --card:#1c1238;
+  --card2:#25164a;
+  --muted:#b8a6e0;
+  --shadow:rgba(0,0,0,0.6);
+}
+body[data-theme="deep"]{
+  --bg:#06141a;
+  --fg:#d6f5ff;
+  --acc:#2ef5cc;
+  --acc2:#7c5cff;
+  --line:#123040;
+  --card:#0d222d;
+  --card2:#123040;
+  --muted:#7fb5c8;
+  --shadow:rgba(0,0,0,0.6);
+}
+
+/* STAGE & CANVAS */
+#stage{
+  position:fixed; inset:0;
+  overflow:hidden;
+  background:var(--bg);
+  perspective:1200px;
+}
+#canvas{
+  position:absolute; top:0; left:0;
+  width:7700px; height:5900px;
+  transform-origin:0 0;
+  will-change:transform;
+  transform: translate(0px,0px) rotate(0deg) scale(1) translate(0px,0px);
+  transition: transform 1.3s cubic-bezier(.66,.02,.24,1);
+}
+
+/* BACKGROUND EFFECTS */
+#bokeh-layer{position:absolute; inset:0; pointer-events:none; overflow:hidden; z-index:0}
+.bokeh{
+  position:absolute; border-radius:50%;
+  filter:blur(40px); opacity:0.35;
+  animation: floatBokeh linear infinite;
+}
+@keyframes floatBokeh{
+  0%{transform:translate(0,0) scale(1)}
+  50%{transform:translate(40px,-60px) scale(1.2)}
+  100%{transform:translate(0,0) scale(1)}
+}
+#grain{
+  position:absolute; inset:-20%;
+  pointer-events:none; z-index:1;
+  opacity:0.06;
+  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  animation: grainShift 8s steps(10) infinite;
+}
+@keyframes grainShift{
+  0%,100%{transform:translate(0,0)}
+  10%{transform:translate(-5%,-5%)}
+  20%{transform:translate(-10%,5%)}
+  30%{transform:translate(5%,-10%)}
+  40%{transform:translate(-5%,15%)}
+  50%{transform:translate(-10%,5%)}
+  60%{transform:translate(15%,0)}
+  70%{transform:translate(0,10%)}
+  80%{transform:translate(5%,15%)}
+  90%{transform:translate(10%,5%)}
+}
+#vignette{
+  position:absolute; inset:0; pointer-events:none; z-index:2;
+  background: radial-gradient(ellipse at center, transparent 58%, rgba(0,0,0,0.55) 100%);
+}
+
+/* SVG PATH */
+#pathSvg{
+  position:absolute; top:0; left:0; width:7700px; height:5900px;
+  pointer-events:none; z-index:3;
+}
+.path-main{
+  fill:none; stroke:var(--line); stroke-width:3.5;
+  stroke-dasharray:14 18; opacity:0.6;
+}
+.path-progress{
+  fill:none; stroke:var(--acc); stroke-width:5;
+  stroke-linecap:round; stroke-linejoin:round;
+  filter: drop-shadow(0 0 8px var(--acc));
+  transition: stroke-dashoffset 1.3s cubic-bezier(.66,.02,.24,1);
+}
+.marker{
+  fill:var(--card); stroke:var(--acc); stroke-width:2.5;
+}
+.marker.active{fill:var(--acc); stroke:var(--bg); filter:drop-shadow(0 0 10px var(--acc))}
+.marker-text{font-family:sans-serif; font-size:16px; font-weight:800; fill:var(--fg); text-anchor:middle; dominant-baseline:central; pointer-events:none}
+.marker.active .marker-text, .marker.active + text{fill:white}
+
+/* FRAMES */
+.frame{
+  position:absolute;
+  width:var(--w); height:var(--h);
+  background:var(--card);
+  border:1.5px solid var(--line);
+  border-radius:28px;
+  padding:28px 30px;
+  box-shadow: 0 20px 60px var(--shadow), inset 0 1px 0 rgba(255,255,255,0.06);
+  z-index:5;
+  overflow:hidden;
+  display:flex; flex-direction:column;
+  transform: rotate(var(--rot));
+  transition: box-shadow 0.6s ease, border-color 0.6s ease, background 0.9s ease;
+}
+.frame.active{
+  border-color:var(--acc);
+  box-shadow: 0 30px 90px var(--shadow), 0 0 0 1.5px var(--acc), 0 0 40px rgba(124,92,255,0.25);
+}
+.frame::before{
+  content:''; position:absolute; top:0; right:0; left:0; height:4px;
+  background: linear-gradient(90deg, var(--acc), var(--acc2));
+  opacity:0.9;
+}
+.frame-head{
+  display:flex; align-items:center; justify-content:space-between; margin-bottom:14px;
+}
+.frame-num{
+  font-size:14px; letter-spacing:1px; color:var(--muted);
+  background:var(--card2); border:1px solid var(--line);
+  padding:4px 10px; border-radius:20px;
+}
+.frame-theme{font-size:16px; color:var(--acc); font-weight:700; letter-spacing:0.5px}
+.frame h2{font-size:42px; margin:6px 0 14px; color:var(--fg)}
+.frame h3{font-size:25px; margin:10px 0 10px; color:var(--acc)}
+.frame p{font-size:19px; color:var(--muted); margin-bottom:12px}
+.frame ul{list-style:none; padding:0}
+.frame li{font-size:18px; padding:7px 0; display:flex; gap:10px; align-items:flex-start; color:var(--fg)}
+.frame li::before{content:'●'; color:var(--acc); font-size:16px; margin-top:10px; flex-shrink:0}
+.tag{
+  display:inline-flex; align-items:center;
+  background:var(--card2); border:1px solid var(--line);
+  color:var(--muted); font-size:14px; padding:5px 12px; border-radius:20px; margin:3px;
+}
+.accent{color:var(--acc); font-weight:700}
+.accent2{color:var(--acc2); font-weight:700}
+
+/* REVEAL */
+.rv{
+  opacity:0; transform:translateY(18px) scale(0.98);
+  transition: opacity 0.7s cubic-bezier(.16,1,.3,1), transform 0.7s cubic-bezier(.16,1,.3,1);
+}
+.frame.active .rv{
+  opacity:1; transform:translateY(0) scale(1);
+}
+.frame:not(.active) .rv{animation-play-state:paused !important}
+
+/* DEMOS */
+.demo-box{
+  background:var(--card2); border:1px solid var(--line);
+  border-radius:18px; padding:14px; margin-top:10px;
+  position:relative; overflow:hidden;
+}
+.demo-row{display:flex; gap:10px; flex-wrap:wrap}
+.demo-card{
+  flex:1; min-width:120px;
+  background:var(--card); border:1px solid var(--line);
+  border-radius:14px; padding:12px; text-align:center;
+  transition: transform 0.3s, border-color 0.3s;
+  cursor:pointer;
+}
+.demo-card:hover{transform:translateY(-4px) scale(1.02); border-color:var(--acc)}
+.mini-bar{height:6px; background:var(--line); border-radius:10px; overflow:hidden; margin:8px 0}
+.mini-fill{height:100%; background:linear-gradient(90deg,var(--acc),var(--acc2)); border-radius:10px; transition:width 1s ease}
+
+/* SPECIFIC DEMO VISUALS */
+.storage-grid{display:grid; grid-template-columns:1fr 1fr; gap:8px; font-family:monospace; font-size:15px}
+.storage-cell{background:var(--card); border:1px solid var(--line); border-radius:8px; padding:6px 8px}
+.col-highlight{background:rgba(124,92,255,0.15); border-color:var(--acc)}
+.row-highlight{background:rgba(46,245,204,0.12); border-color:var(--acc2)}
+.part{width:70px; height:46px; background:var(--card2); border:1px solid var(--line); border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; position:relative; transition:all 0.8s cubic-bezier(.66,.02,.24,1)}
+.part.merging{transform:scale(0.8); opacity:0.5}
+.part.merged{width:220px; background:linear-gradient(135deg,var(--acc),var(--acc2)); color:white; border-color:transparent}
+.partition{display:inline-flex; width:62px; height:56px; margin:4px; border-radius:10px; background:var(--card2); border:1px solid var(--line); align-items:center; justify-content:center; flex-direction:column; font-size:16px; cursor:pointer; transition:all 0.3s}
+.partition.active{background:var(--acc); color:white; transform:scale(1.08); box-shadow:0 6px 20px rgba(124,92,255,0.4)}
+.partition.scanned{border-color:var(--acc2); background:rgba(46,245,204,0.15)}
+.layer{padding:10px 14px; border-radius:12px; background:var(--card); border:1px solid var(--line); margin:6px 0; cursor:pointer; transition:all 0.3s; display:flex; justify-content:space-between; align-items:center}
+.layer:hover{border-color:var(--acc); transform:translateX(-6px); background:var(--card2)}
+.layer .dot{width:8px; height:8px; border-radius:50%; background:var(--acc)}
+
+/* HUD */
+#hudTop{
+  position:fixed; top:0; right:0; left:0; height:56px;
+  display:flex; align-items:center; justify-content:space-between;
+  padding:0 22px; z-index:100; pointer-events:none;
+}
+.hud-pill{
+  pointer-events:auto;
+  background:rgba(16,25,46,0.82); backdrop-filter:blur(16px);
+  border:1px solid var(--line); border-radius:24px;
+  padding:8px 16px; display:flex; align-items:center; gap:12px;
+  box-shadow:0 8px 24px rgba(0,0,0,0.25);
+}
+#hudBottom{
+  position:fixed; bottom:0; right:0; left:0; height:72px;
+  display:flex; align-items:center; justify-content:space-between;
+  padding:0 20px; z-index:100; pointer-events:none;
+}
+.hud-nav{display:flex; gap:10px; pointer-events:auto}
+.navBtn{
+  width:44px; height:44px; border-radius:14px;
+  background:rgba(16,25,46,0.82); backdrop-filter:blur(16px);
+  border:1px solid var(--line); color:var(--fg);
+  display:flex; align-items:center; justify-content:center;
+  cursor:pointer; font-size:18px; transition:all 0.2s;
+  box-shadow:0 8px 24px rgba(0,0,0,0.2);
+}
+.navBtn:hover{border-color:var(--acc); transform:translateY(-2px); background:var(--card)}
+.navBtn:active{transform:translateY(0)}
+#progressDots{
+  display:flex; gap:8px; align-items:center; pointer-events:auto;
+  background:rgba(16,25,46,0.82); backdrop-filter:blur(16px);
+  border:1px solid var(--line); border-radius:24px; padding:10px 16px;
+  max-width:60vw; overflow-x:auto; scrollbar-width:none;
+}
+#progressDots::-webkit-scrollbar{display:none}
+.pdot{
+  width:10px; height:10px; border-radius:50%;
+  background:var(--line); cursor:pointer; transition:all 0.3s; flex-shrink:0;
+  position:relative;
+}
+.pdot.active{background:var(--acc); transform:scale(1.6); box-shadow:0 0 0 4px rgba(124,92,255,0.2)}
+.pdot::after{content:attr(data-n); position:absolute; top:-20px; left:50%; transform:translateX(-50%); font-size:9px; color:var(--muted); opacity:0; transition:opacity 0.2s}
+.pdot:hover::after{opacity:1}
+#progressBar{position:fixed; top:0; left:0; height:3px; background:linear-gradient(90deg,var(--acc),var(--acc2)); z-index:200; transition:width 0.6s ease; box-shadow:0 0 10px var(--acc)}
+
+/* OVERLAYS */
+#blackout,#whiteout{
+  position:fixed; inset:0; z-index:300;
+  opacity:0; pointer-events:none; transition:opacity 0.5s ease;
+}
+#blackout{background:#000}
+#whiteout{background:#fff}
+#blackout.on,#whiteout.on{opacity:1; pointer-events:auto}
+#helpOverlay{
+  position:fixed; inset:0; z-index:250;
+  background:rgba(7,11,20,0.85); backdrop-filter:blur(20px);
+  display:flex; align-items:center; justify-content:center;
+  opacity:0; pointer-events:none; transition:opacity 0.4s;
+}
+#helpOverlay.on{opacity:1; pointer-events:auto}
+.help-card{
+  background:var(--card); border:1px solid var(--line); border-radius:24px;
+  padding:28px; max-width:520px; width:90%; max-height:85vh; overflow:auto;
+}
+.help-grid{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:14px}
+.help-item{display:flex; gap:8px; align-items:center; font-size:16px}
+.help-item kbd{
+  background:var(--card2); border:1px solid var(--line); border-bottom-width:2px;
+  padding:2px 7px; border-radius:6px; font-size:15px; min-width:28px; text-align:center;
+}
+#numIndicator{
+  position:fixed; top:50%; left:50%; transform:translate(-50%,-50%) scale(0.8);
+  background:var(--card); border:2px solid var(--acc); color:var(--fg);
+  font-size:56px; font-weight:800; padding:20px 40px; border-radius:24px;
+  z-index:260; opacity:0; pointer-events:none; transition:all 0.25s cubic-bezier(.16,1,.3,1);
+  box-shadow:0 20px 60px rgba(0,0,0,0.4), 0 0 40px rgba(124,92,255,0.3);
+}
+#numIndicator.on{opacity:1; transform:translate(-50%,-50%) scale(1)}
+#overviewHint{
+  position:fixed; top:74px; left:50%; transform:translateX(-50%);
+  background:var(--acc); color:white; padding:8px 18px; border-radius:20px;
+  font-size:16px; z-index:90; opacity:0; pointer-events:none; transition:opacity 0.4s;
+}
+#overviewHint.on{opacity:1}
+
+/* ANIMATIONS */
+@keyframes pulse{0%,100%{transform:scale(1)} 50%{transform:scale(1.05)}}
+@keyframes slideIn{from{transform:translateX(30px); opacity:0} to{transform:translateX(0); opacity:1}}
+.pulse{animation:pulse 2.5s ease-in-out infinite}
+</style>
+</head>
+<body data-theme="dark">
+<div id="progressBar"></div>
+<div id="stage">
+  <div id="bokeh-layer"></div>
+  <div id="grain"></div>
+  <div id="vignette"></div>
+  <div id="canvas">
+    <svg id="pathSvg" viewBox="0 0 7700 5900" xmlns="http://www.w3.org/2000/svg">
+      <path id="mainPath" class="path-main"></path>
+      <path id="progressPath" class="path-progress"></path>
+      <g id="markers"></g>
+    </svg>
+
+    <!-- FRAME 0: Title -->
+    <section class="frame" data-x="150" data-y="150" data-width="1100" data-height="750" data-rotation="-1" data-theme="accent" data-title="عنوان ارائه">
+      <div class="frame-head"><span class="frame-num">00 / 20</span><span class="frame-theme">CLICKHOUSE JOURNEY</span></div>
+      <h2 class="rv" style="font-size:38px; margin-top:8px">از مفاهیم پایگاه داده تا ساخت یک پلتفرم تحلیل داده با <span style="color:var(--acc)">ClickHouse</span></h2>
+      <p class="rv" data-delay="1" style="font-size:16px; color:var(--fg); margin-top:12px">مسیر یادگیری ClickHouse از مفاهیم پایه تا ساخت یک سیستم تحلیل داده مخابراتی</p>
+      <div class="rv" data-delay="2" style="margin-top:18px; display:flex; gap:8px; flex-wrap:wrap">
+        <span class="tag">OLAP</span><span class="tag">Columnar Storage</span><span class="tag">MergeTree</span><span class="tag">Telecom Analytics</span>
+      </div>
+      <div class="rv demo-box" data-delay="3" style="margin-top:auto; display:flex; justify-content:space-between; align-items:center">
+        <div><div style="font-size:15px; color:var(--muted)">سخنران</div><div style="font-weight:700">توسعه‌دهنده داده</div></div>
+        <div class="pulse" style="width:48px; height:48px; border-radius:14px; background:linear-gradient(135deg,var(--acc),var(--acc2)); display:flex; align-items:center; justify-content:center; color:white; font-weight:800">CH</div>
+      </div>
+    </section>
+
+    <!-- FRAME 1 -->
+    <section class="frame" data-x="1650" data-y="150" data-width="1050" data-height="750" data-rotation="1.5" data-theme="dark" data-title="چالش داده‌های مدرن">
+      <div class="frame-head"><span class="frame-num">01 / 20</span><span class="frame-theme">CHALLENGE</span></div>
+      <h2 class="rv">مقدمه: چالش داده‌های مدرن</h2>
+      <p class="rv" data-delay="1">در سیستم‌های امروزی حجم داده‌ها به سرعت در حال افزایش است. برای مثال در صنعت مخابرات:</p>
+      <div class="rv demo-box" data-delay="2">
+        <div class="demo-row">
+          <div class="demo-card"><div style="font-size:22px">⚡</div><div style="font-size:15px; font-weight:700">میلیاردها رویداد/روز</div><div class="mini-bar"><div class="mini-fill" style="width:92%"></div></div></div>
+          <div class="demo-card"><div style="font-size:22px">📶</div><div style="font-size:15px; font-weight:700">Latency / Packet Loss</div><div class="mini-bar"><div class="mini-fill" style="width:74%"></div></div></div>
+          <div class="demo-card"><div style="font-size:22px">📱</div><div style="font-size:15px; font-weight:700">4G / 5G / Device</div><div class="mini-bar"><div class="mini-fill" style="width:88%"></div></div></div>
+        </div>
+      </div>
+      <div class="rv" data-delay="3" style="margin-top:12px">
+        <h3>سوال‌های تحلیلی مهم:</h3>
+        <ul>
+          <li>کدام شهر بیشترین مصرف داده را دارد؟</li>
+          <li>کیفیت شبکه در چه ساعتی کاهش پیدا می‌کند؟</li>
+          <li>میانگین Latency کاربران 5G چقدر است؟</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- FRAME 2 OLTP vs OLAP Interactive -->
+    <section class="frame" data-x="3150" data-y="150" data-width="1100" data-height="800" data-rotation="-1" data-theme="deep" data-title="OLTP در مقابل OLAP">
+      <div class="frame-head"><span class="frame-num">02 / 20</span><span class="frame-theme">OLTP vs OLAP</span></div>
+      <h2 class="rv">دو دنیای متفاوت در پایگاه داده</h2>
+      <div class="rv demo-box" data-delay="1" id="oltp-olap-demo" style="padding:0; overflow:hidden">
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--line)">
+          <div style="background:var(--card); padding:14px">
+            <div style="display:flex; justify-content:space-between; align-items:center"><strong style="color:var(--acc)">OLTP</strong><span class="tag" id="oltp-count">1,240 trx/s</span></div>
+            <div id="oltp-viz" style="height:110px; position:relative; margin-top:10px; background:var(--card2); border-radius:10px; overflow:hidden"></div>
+            <div style="font-size:14px; color:var(--muted); margin-top:8px">تراکنش‌های کوچک، نوشتن سریع، خواندن یک رکورد کامل</div>
+          </div>
+          <div style="background:var(--card); padding:14px">
+            <div style="display:flex; justify-content:space-between"><strong style="color:var(--acc2)">OLAP</strong><span class="tag" id="olap-count">3.2B rows scanned</span></div>
+            <div id="olap-viz" style="height:110px; position:relative; margin-top:10px; background:var(--card2); border-radius:10px; overflow:hidden"></div>
+            <div style="font-size:14px; color:var(--muted); margin-top:8px">تحلیل حجم عظیم، Aggregation، کشف الگو</div>
+          </div>
+        </div>
+      </div>
+      <div class="rv" data-delay="2" style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px">
+        <div><h3>OLTP مثال:</h3><ul><li>سیستم بانکی</li><li>فروشگاه اینترنتی</li></ul></div>
+        <div><h3>OLAP مثال:</h3><ul><li>مانیتورینگ شبکه</li><li>BI & Data Warehouse</li></ul></div>
+      </div>
+    </section>
+
+    <!-- FRAME 3 Row vs Column -->
+    <section class="frame" data-x="4650" data-y="150" data-width="1200" data-height="850" data-rotation="1.2" data-theme="dark" data-title="ذخیره‌سازی سطری و ستونی">
+      <div class="frame-head"><span class="frame-num">03 / 20</span><span class="frame-theme">STORAGE MODEL</span></div>
+      <h2 class="rv">تفاوت ذخیره‌سازی سطری و ستونی</h2>
+      <div class="rv demo-box" data-delay="1" id="row-col-demo">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px">
+          <div><strong id="storage-mode-label">Row-Oriented</strong><div style="font-size:14px; color:var(--muted)">هر رکورد کامل ذخیره می‌شود</div></div>
+          <button id="toggle-storage" class="navBtn" style="width:auto; padding:0 16px; font-size:16px; pointer-events:auto">تبدیل به ستونی ←</button>
+        </div>
+        <div id="storage-grid" class="storage-grid"></div>
+        <div style="margin-top:12px; display:flex; gap:8px; align-items:center; font-size:15px">
+          <span>Query:</span><code style="background:var(--card); padding:4px 8px; border-radius:6px; border:1px solid var(--line)">SELECT avg(latency) WHERE city='Tehran'</code>
+          <span id="io-result" class="tag" style="margin-right:auto; background:var(--acc); color:white">می‌خواند: همه ستون‌ها</span>
+        </div>
+      </div>
+      <div class="rv" data-delay="2" style="display:grid; grid-template-columns:1fr 1fr; gap:12px">
+        <div class="demo-card" style="text-align:right"><strong>Row Storage</strong><p style="font-size:15px; margin:4px 0">مناسب برای Transactional، خواندن یک رکورد کامل</p></div>
+        <div class="demo-card" style="text-align:right; border-color:var(--acc)"><strong>Column Storage</strong><p style="font-size:15px; margin:4px 0">فقط ستون‌های مورد نیاز، Compression بهتر، پایه ClickHouse</p></div>
+      </div>
+    </section>
+
+    <!-- FRAME 4 Why ClickHouse -->
+    <section class="frame" data-x="6150" data-y="150" data-width="1000" data-height="700" data-rotation="-1.5" data-theme="accent" data-title="چرا ClickHouse؟">
+      <div class="frame-head"><span class="frame-num">04 / 20</span><span class="frame-theme">WHY CLICKHOUSE</span></div>
+      <h2 class="rv">ClickHouse چیست؟</h2>
+      <p class="rv" data-delay="1">یک دیتابیس تحلیلی Column-Oriented برای پردازش حجم عظیم داده</p>
+      <div class="rv demo-box" data-delay="2">
+        <div class="demo-row">
+          <div class="demo-card"><div style="font-size:26px">🚀</div><div style="font-weight:700; font-size:16px">Query های بسیار سریع</div><div class="mini-bar"><div class="mini-fill" style="width:95%"></div></div></div>
+          <div class="demo-card"><div style="font-size:26px">📦</div><div style="font-weight:700; font-size:16px">Ingestion بالا</div><div class="mini-bar"><div class="mini-fill" style="width:90%"></div></div></div>
+          <div class="demo-card"><div style="font-size:26px">🗜️</div><div style="font-weight:700; font-size:16px">Compression عالی</div><div class="mini-bar"><div class="mini-fill" style="width:85%"></div></div></div>
+        </div>
+        <div style="margin-top:12px; display:flex; flex-wrap:wrap; gap:6px">
+          <span class="tag">Columnar Storage</span><span class="tag">MergeTree Engine</span><span class="tag">Data Parts</span><span class="tag">Partitioning</span><span class="tag">Vectorized Execution</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- FRAME 5 Storage Arch -->
+    <section class="frame" data-x="6150" data-y="1300" data-width="1000" data-height="750" data-rotation="1" data-theme="deep" data-title="معماری ذخیره‌سازی">
+      <div class="frame-head"><span class="frame-num">05 / 20</span><span class="frame-theme">STORAGE ARCH</span></div>
+      <h2 class="rv">ClickHouse چگونه داده را ذخیره می‌کند؟</h2>
+      <div class="rv demo-box" data-delay="1" id="cascade-merge-demo" style="text-align:center; min-height:420px">
+        <div style="font-size:14px; color:var(--muted); margin-bottom:10px">هر INSERT یک Part کوچک می‌سازد؛ Partها ادغام و Partهای ادغام‌شده دوباره ادغام می‌شوند</div>
+        <div id="cascade-l1" style="display:flex; justify-content:center; gap:10px; flex-wrap:wrap; min-height:60px"></div>
+        <div style="font-size:20px; color:var(--muted); margin:4px 0">↓ merge ↓</div>
+        <div id="cascade-l2" style="display:flex; justify-content:center; gap:14px; flex-wrap:wrap; min-height:60px"></div>
+        <div style="font-size:20px; color:var(--muted); margin:4px 0">↓ merge ↓</div>
+        <div id="cascade-l3" style="display:flex; justify-content:center; gap:14px; flex-wrap:wrap; min-height:70px"></div>
+        <div style="margin-top:14px; font-size:15px; color:var(--muted)">برخلاف دیتابیس‌های سنتی، ClickHouse دائماً Rewrite نمی‌کند؛ Part جدید می‌سازد و در پس‌زمینه، Partهای کوچک را به Partهای بزرگ‌تر ادغام می‌کند.</div>
+      </div>
+    </section>
+
+    <!-- FRAME 6 MergeTree -->
+    <section class="frame" data-x="4650" data-y="1300" data-width="950" data-height="700" data-rotation="-1.2" data-theme="dark" data-title="موتور MergeTree">
+      <div class="frame-head"><span class="frame-num">06 / 20</span><span class="frame-theme">MERGETREE ENGINE</span></div>
+      <h2 class="rv">قلب ذخیره‌سازی ClickHouse</h2>
+      <div class="rv demo-box" data-delay="1" style="font-family:monospace; font-size:16px; direction:ltr; text-align:left">
+        <div style="color:var(--muted)">CREATE TABLE network_events</div>
+        <div><span style="color:var(--acc)">ENGINE</span> = MergeTree()</div>
+        <div><span style="color:var(--acc)">PARTITION BY</span> toYYYYMM(event_time)</div>
+        <div><span style="color:var(--acc)">ORDER BY</span> (event_time, user_id)</div>
+        <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap">
+          <span class="tag">مدیریت Data Parts</span><span class="tag">مرتب‌سازی</span><span class="tag">Partition</span><span class="tag">Merge خودکار</span>
+        </div>
+      </div>
+      <div class="rv" data-delay="2" style="margin-top:12px">
+        <p>MergeTree مسئول مرتب‌سازی داده، Partition بندی و بهینه‌سازی Query هاست. انتخاب ORDER BY تاثیر مستقیم روی Performance دارد.</p>
+      </div>
+    </section>
+
+    <!-- FRAME 7 Batch Insert -->
+    <section class="frame" data-x="3150" data-y="1300" data-width="1150" data-height="800" data-rotation="1.6" data-theme="dark" data-title="چرا Batch Insert مهم است">
+      <div class="frame-head"><span class="frame-num">07 / 20</span><span class="frame-theme">BATCH INSERT</span></div>
+      <h2 class="rv">چرا Batch Insert برای MergeTree ضروری است</h2>
+      <p class="rv" data-delay="1">Batch Insert یکی از مهم‌ترین بهینه‌سازی‌های Performance برای موتور MergeTree است. چون هر Insert معمولاً یک Data Part جدید می‌سازد، تعداد زیاد Insertهای کوچک، تعداد زیادی Part کوچک تولید می‌کند.</p>
+      <div class="rv demo-box" data-delay="2" style="display:grid; grid-template-columns:1fr 1fr; gap:14px">
+        <div style="background:rgba(255,107,107,0.08); border:1px solid #ff6b6b; border-radius:14px; padding:14px; text-align:center">
+          <div style="font-weight:800; color:#ff6b6b; margin-bottom:8px">هزاران Insert کوچک</div>
+          <div style="font-family:monospace; font-size:14px">1,000,000 INSERT</div>
+          <div style="font-size:20px; margin:6px 0">↓</div>
+          <div style="font-family:monospace; font-size:14px">1,000,000 Data Part</div>
+          <div style="font-size:20px; margin:6px 0">↓</div>
+          <div style="color:#ff6b6b; font-weight:700">فشار سنگین روی Merge</div>
+        </div>
+        <div style="background:rgba(46,245,204,0.08); border:1px solid var(--acc2); border-radius:14px; padding:14px; text-align:center">
+          <div style="font-weight:800; color:var(--acc2); margin-bottom:8px">یک Batch Insert</div>
+          <div style="font-family:monospace; font-size:14px">۱ Batch INSERT</div>
+          <div style="font-size:20px; margin:6px 0">↓</div>
+          <div style="font-family:monospace; font-size:14px">فقط ۱ Data Part</div>
+          <div style="font-size:20px; margin:6px 0">↓</div>
+          <div style="color:var(--acc2); font-weight:700">Merge سبک و سریع</div>
+        </div>
+      </div>
+      <div class="rv" data-delay="3" style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap">
+        <span class="tag">کاهش تعداد Part</span><span class="tag">Compression بهتر</span><span class="tag">Overhead کمتر Storage</span><span class="tag">Query سریع‌تر</span>
+      </div>
+      <p class="rv" data-delay="4" style="margin-top:10px">به همین دلیل مستندات رسمی ClickHouse توصیه می‌کند به‌جای ارسال بسیاری Insert کوچک، داده را در Batchهای بزرگ ارسال کنیم.</p>
+    </section>
+
+    <!-- FRAME 8 Logical I/O -->
+    <section class="frame" data-x="1650" data-y="1300" data-width="1100" data-height="800" data-rotation="-1.5" data-theme="deep" data-title="Logical vs Physical I/O">
+      <div class="frame-head"><span class="frame-num">08 / 20</span><span class="frame-theme">I/O MODEL</span></div>
+      <h2 class="rv">درک نحوه دسترسی به داده</h2>
+      <div class="rv demo-box" data-delay="1">
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px">
+          <div><strong>Physical I/O</strong><div style="font-size:15px; color:var(--muted); margin-top:4px">خواندن واقعی از Disk → Memory</div><div id="phys-io" style="height:8px; background:var(--line); border-radius:8px; margin-top:8px"><div style="width:92%; height:100%; background:var(--muted); border-radius:8px"></div></div><div style="font-size:14px; margin-top:4px">92% داده دیسک خوانده شد</div></div>
+          <div><strong style="color:var(--acc2)">Logical I/O در ClickHouse</strong><div style="font-size:15px; color:var(--muted); margin-top:4px">فقط داده مورد نیاز پردازش می‌شود</div><div style="height:8px; background:var(--line); border-radius:8px; margin-top:8px"><div style="width:18%; height:100%; background:linear-gradient(90deg,var(--acc),var(--acc2)); border-radius:8px"></div></div><div style="font-size:14px; margin-top:4px; color:var(--acc2)">فقط 18% — ستون Latency تهران</div></div>
+        </div>
+        <div style="margin-top:14px; background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px; font-family:monospace; font-size:15px; direction:ltr">
+          SELECT avg(latency_ms) FROM network_events WHERE city='Tehran'<br>
+          <span style="color:var(--acc2)">→ ClickHouse فقط ستون latency را می‌خواند، داده غیرضروری نادیده گرفته می‌شود</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- FRAME 9 Primary Index / Mark / Column chain -->
+    <section class="frame" data-x="150" data-y="1300" data-width="1150" data-height="820" data-rotation="1" data-theme="dark" data-title="از Primary Index تا Column File">
+      <div class="frame-head"><span class="frame-num">09 / 20</span><span class="frame-theme">INTERNAL STORAGE</span></div>
+      <h2 class="rv">یک Query چطور فقط بخش لازم را از دیسک می‌خواند؟</h2>
+      <div class="rv demo-box" data-delay="1" style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px">
+        <div class="demo-card" style="text-align:right">
+          <strong style="color:var(--acc)">۱. Primary Index</strong>
+          <div style="font-family:monospace; font-size:13px; margin:6px 0; direction:ltr; text-align:left; color:var(--muted)">primary.idx</div>
+          <div style="font-size:14px">می‌گوید: <span class="accent">۵۰۰ در Granule ۲۰ است</span></div>
+        </div>
+        <div class="demo-card" style="text-align:right">
+          <strong style="color:var(--acc)">۲. Mark File</strong>
+          <div style="font-family:monospace; font-size:13px; margin:6px 0; direction:ltr; text-align:left; color:var(--muted)">age.mrk2 · name.mrk2</div>
+          <div style="font-size:14px">می‌گوید: <span class="accent">Granule ۲۰ از کجای فایل شروع می‌شود</span></div>
+        </div>
+        <div class="demo-card" style="text-align:right">
+          <strong style="color:var(--acc)">۳. Column File</strong>
+          <div style="font-family:monospace; font-size:13px; margin:6px 0; direction:ltr; text-align:left; color:var(--muted)">age.bin · name.bin</div>
+          <div style="font-size:14px">فقط <span class="accent2">همان بخش</span> خوانده می‌شود</div>
+        </div>
+      </div>
+      <div class="rv" data-delay="2" style="margin-top:12px; display:grid; grid-template-columns:1fr 1fr; gap:14px">
+        <div class="demo-box" style="text-align:center">
+          <div style="font-size:13px; color:var(--muted); margin-bottom:8px">تصویر ذهنی نهایی 🧠</div>
+          <div style="font-family:monospace; font-size:12px; direction:ltr; text-align:left; line-height:1.6">
+Table<br>&nbsp;└── Data Part<br>&nbsp;&nbsp;&nbsp;&nbsp;├── primary.idx<br>&nbsp;&nbsp;&nbsp;&nbsp;├── id.bin, name.bin, age.bin<br>&nbsp;&nbsp;&nbsp;&nbsp;└── id.mrk2, name.mrk2, age.mrk2
+          </div>
+        </div>
+        <div class="demo-box" style="text-align:center">
+          <div style="font-size:13px; color:var(--muted); margin-bottom:8px">زنجیره کامل</div>
+          <div style="font-family:monospace; font-size:12px; direction:ltr; text-align:left; line-height:1.7">
+INSERT → Data Part → Granules<br>→ Primary Index → Mark Files<br>→ Column Files → Physical I/O
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FRAME 10 Indexing -->
+    <section class="frame" data-x="150" data-y="2450" data-width="1150" data-height="900" data-rotation="-1.2" data-theme="accent" data-title="Indexing و Optimization">
+      <div class="frame-head"><span class="frame-num">10 / 20</span><span class="frame-theme">QUERY OPTIMIZATION</span></div>
+      <h2 class="rv">چگونه Query ها سریع‌تر اجرا می‌شوند؟</h2>
+      <p class="rv" data-delay="1" style="margin-bottom:2px"><span class="accent">Pruning</span> یعنی «هرَس کردن» — ClickHouse قبل از خواندن، Partitionهایی که مطمئن است داده مورد نیاز Query در آن‌ها نیست را کلاً کنار می‌گذارد و اصلاً باز نمی‌کند.</p>
+      <div class="rv demo-box" data-delay="2">
+        <div style="font-size:16px; margin-bottom:10px">روی یک ماه کلیک کنید — فقط همان یک ماه انتخاب و Scan می‌شود:</div>
+        <div id="partitions" style="display:flex; flex-wrap:wrap; justify-content:center; gap:8px"></div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:16px">
+          <div class="demo-card" style="text-align:right"><strong>بدون Partition Pruning</strong><div id="scan-all" class="mini-bar"><div class="mini-fill" style="width:100%; background:var(--muted)"></div></div><div style="font-size:15px">۱۲ ماه Scan = 12.4B rows (کل جدول)</div></div>
+          <div class="demo-card" style="text-align:right; border-color:var(--acc2)"><strong>با Pruning</strong><div class="mini-bar"><div id="scan-pruned" class="mini-fill" style="width:0%"></div></div><div style="font-size:15px" id="scan-text">یک ماه را انتخاب کنید</div></div>
+        </div>
+        <div style="margin-top:14px; font-family:monospace; font-size:15px; background:var(--card2); padding:10px; border-radius:8px; direction:ltr">ORDER BY(event_time,user_id) → Data Ordering + Partition Pruning</div>
+        <div style="margin-top:14px; display:flex; flex-wrap:wrap; gap:8px">
+          <span class="tag">PARTITION BY toYYYYMM(event_time)</span><span class="tag">هر Partition = یک ماه</span><span class="tag">۱۲.۴B rows / ۱۲ ماه ≈ ۱.۰۳B rows در هر ماه</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- FRAME 11 Theory to project -->
+    <section class="frame" data-x="1650" data-y="2450" data-width="1150" data-height="750" data-rotation="1.4" data-theme="accent" data-title="از تئوری تا عمل">
+      <div class="frame-head"><span class="frame-num">11 / 20</span><span class="frame-theme">PROJECT BRIDGE</span></div>
+      <h2 class="rv">تبدیل تئوری به پروژه عملی</h2>
+      <p class="rv" data-delay="1">بعد از یادگیری مفاهیم ClickHouse برای تجربه عملی یک سیستم تحلیل داده ساختم.</p>
+      <div class="rv demo-box" data-delay="2" style="text-align:center; padding:20px">
+        <div style="font-size:14px; color:var(--muted)">هدف پروژه</div>
+        <div style="font-size:22px; font-weight:800; margin:8px 0">شبیه‌سازی Event های مخابراتی و تحلیل آن‌ها با ClickHouse</div>
+        <div style="display:flex; gap:8px; justify-content:center; margin-top:14px; flex-wrap:wrap">
+          <span class="tag">Synthetic Data</span><span class="tag">Batch Pipeline</span><span class="tag">Analytics Layer</span><span class="tag">Dashboard</span>
+        </div>
+        <div style="margin-top:16px; display:inline-flex; gap:4px">
+          <div style="width:12px; height:12px; border-radius:50%; background:var(--acc); animation:pulse 1.5s infinite"></div>
+          <div style="width:12px; height:12px; border-radius:50%; background:var(--acc2); animation:pulse 1.5s 0.3s infinite"></div>
+          <div style="width:12px; height:12px; border-radius:50%; background:var(--muted); animation:pulse 1.5s 0.6s infinite"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FRAME 12 Project Arch -->
+    <section class="frame" data-x="3150" data-y="2450" data-width="1100" data-height="800" data-rotation="-1" data-theme="dark" data-title="معماری پروژه">
+      <div class="frame-head"><span class="frame-num">12 / 20</span><span class="frame-theme">ARCHITECTURE</span></div>
+      <h2 class="rv">معماری پروژه</h2>
+      <div class="rv" data-delay="1" id="arch-layers" style="margin-top:8px">
+        <!-- layers injected by JS -->
+      </div>
+      <div class="rv" data-delay="2" style="margin-top:12px; font-size:15px; color:var(--muted)">هر لایه قابل Hover و کلیک است — جزئیات را ببینید</div>
+    </section>
+
+    <!-- FRAME 13 Data Model -->
+    <section class="frame" data-x="4650" data-y="2450" data-width="1000" data-height="750" data-rotation="1.3" data-theme="deep" data-title="مدل داده">
+      <div class="frame-head"><span class="frame-num">13 / 20</span><span class="frame-theme">SCHEMA</span></div>
+      <h2 class="rv">Network Events Schema</h2>
+      <div class="rv demo-box" data-delay="1">
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:16px">
+          <div class="storage-cell"><strong>event_time</strong><div style="font-size:14px; color:var(--muted)">DateTime — زمان رویداد</div></div>
+          <div class="storage-cell"><strong>user_id</strong><div style="font-size:14px; color:var(--muted)">UInt32 — شناسه کاربر</div></div>
+          <div class="storage-cell"><strong>city</strong><div style="font-size:14px; color:var(--muted)">LowCardinality(String)</div></div>
+          <div class="storage-cell"><strong>device</strong><div style="font-size:14px; color:var(--muted)">Android / iPhone</div></div>
+          <div class="storage-cell"><strong>network_type</strong><div style="font-size:14px; color:var(--muted)">4G / 5G</div></div>
+          <div class="storage-cell"><strong>app_name</strong><div style="font-size:14px; color:var(--muted)">Instagram, YouTube...</div></div>
+          <div class="storage-cell"><strong>latency_ms</strong><div style="font-size:14px; color:var(--muted)">UInt16 — تاخیر</div></div>
+          <div class="storage-cell"><strong>download_speed</strong><div style="font-size:14px; color:var(--muted)">Float — سرعت</div></div>
+          <div class="storage-cell" style="grid-column:span 2"><strong>packet_loss</strong><div style="font-size:14px; color:var(--muted)">Float32 — رفتار واقعی شبکه مخابراتی را شبیه‌سازی می‌کند</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FRAME 14 Synthetic -->
+    <section class="frame" data-x="6150" data-y="2450" data-width="1050" data-height="750" data-rotation="-1" data-theme="light" data-title="ساخت داده مصنوعی">
+      <div class="frame-head"><span class="frame-num">14 / 20</span><span class="frame-theme">SYNTHETIC DATA</span></div>
+      <h2 class="rv">تولید داده مخابراتی</h2>
+      <div class="rv demo-box" data-delay="1">
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px">
+          <span class="tag">شهرهای مختلف: تهران، شیراز، اصفهان...</span>
+          <span class="tag">دستگاه‌ها: Android, iOS</span>
+          <span class="tag">شبکه: 4G / 5G</span>
+          <span class="tag">اپلیکیشن‌ها</span>
+          <span class="tag">الگوهای مصرف</span>
+        </div>
+        <div style="background:var(--card); border:1px solid var(--line); border-radius:12px; padding:10px; font-family:monospace; font-size:14px; direction:ltr; height:140px; overflow:auto" id="synthetic-log"></div>
+        <button id="gen-data" class="navBtn" style="width:auto; margin-top:10px; padding:0 16px; font-size:15px; pointer-events:auto">تولید 5000 رویداد جدید ⚡</button>
+      </div>
+    </section>
+
+    <!-- FRAME 15 Bulk Insert -->
+    <section class="frame" data-x="6150" data-y="3600" data-width="1100" data-height="750" data-rotation="1" data-theme="dark" data-title="Bulk Insert">
+      <div class="frame-head"><span class="frame-num">15 / 20</span><span class="frame-theme">INGESTION</span></div>
+      <h2 class="rv">ورود سریع داده‌ها</h2>
+      <div class="rv demo-box" data-delay="1">
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px">
+          <div style="text-align:center; padding:12px; background:rgba(255,0,0,0.06); border-radius:12px; border:1px dashed #ff6b6b">
+            <div style="font-weight:700; color:#ff6b6b">روش ساده (کند)</div>
+            <div style="font-size:14px; margin:8px 0; font-family:monospace">Insert<br>Insert<br>Insert<br>...</div>
+            <div class="mini-bar"><div class="mini-fill" style="width:18%; background:#ff6b6b"></div></div>
+            <div style="font-size:14px; color:var(--muted)">~1,200 rows/sec</div>
+          </div>
+          <div style="text-align:center; padding:12px; background:rgba(46,245,204,0.08); border-radius:12px; border:1px solid var(--acc2)">
+            <div style="font-weight:700; color:var(--acc2)">روش بهتر (سریع)</div>
+            <div style="font-size:14px; margin:8px 0; font-family:monospace">Batch بزرگ → Bulk Insert → ClickHouse</div>
+            <div class="mini-bar"><div class="mini-fill" style="width:94%"></div></div>
+            <div style="font-size:14px; color:var(--muted)">~850,000 rows/sec</div>
+          </div>
+        </div>
+        <div style="margin-top:12px; font-size:15px; display:flex; gap:8px">
+          <span class="tag">Throughput بیشتر</span><span class="tag">Overhead کمتر</span><span class="tag">کمترین Part</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- FRAME 16 Software Arch -->
+    <section class="frame" data-x="4650" data-y="3600" data-width="1100" data-height="750" data-rotation="-1.4" data-theme="deep" data-title="معماری نرم‌افزاری">
+      <div class="frame-head"><span class="frame-num">16 / 20</span><span class="frame-theme">SOFTWARE DESIGN</span></div>
+      <h2 class="rv">طراحی تمیز سیستم</h2>
+      <div class="rv demo-box" data-delay="1" style="text-align:center">
+        <div style="display:flex; flex-direction:column; align-items:center; gap:6px" id="soft-layers"></div>
+        <div style="margin-top:14px; display:flex; gap:8px; justify-content:center; flex-wrap:wrap">
+          <span class="tag">Separation of Concerns</span><span class="tag">Maintainability</span><span class="tag">قابل توسعه</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- FRAME 17 Queries -->
+    <section class="frame" data-x="3150" data-y="3600" data-width="1050" data-height="750" data-rotation="1.2" data-theme="dark" data-title="Query های تحلیلی">
+      <div class="frame-head"><span class="frame-num">17 / 20</span><span class="frame-theme">ANALYTICS QUERIES</span></div>
+      <h2 class="rv">نمونه تحلیل‌ها</h2>
+      <div class="rv demo-box" data-delay="1" style="display:grid; gap:14px">
+        <div class="layer" style="flex-direction:column; align-items:stretch; padding:16px"><div style="display:flex; justify-content:space-between"><strong style="font-size:18px">محبوب‌ترین اپلیکیشن‌ها</strong><span class="tag">Top Apps</span></div><code style="font-size:16px; direction:ltr; margin-top:8px; display:block">SELECT app_name, count() FROM network_events GROUP BY app_name ORDER BY count() DESC</code><div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap"><span class="tag">Instagram 34%</span><span class="tag">YouTube 27%</span><span class="tag">Telegram 19%</span></div></div>
+        <div class="layer" style="flex-direction:column; align-items:stretch; padding:16px"><div style="display:flex; justify-content:space-between"><strong style="font-size:18px">افت کیفیت به تفکیک شهر</strong><span class="tag">Packet Loss</span></div><code style="font-size:16px; direction:ltr; margin-top:8px; display:block">SELECT city, avg(packet_loss) FROM network_events GROUP BY city ORDER BY 2 DESC</code><div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap"><span class="tag">Tehran 2.1%</span><span class="tag">Shiraz 3.4%</span><span class="tag">Tabriz 1.8%</span></div></div>
+      </div>
+    </section>
+
+    <!-- FRAME 18 Visualization -->
+    <section class="frame" data-x="1650" data-y="3600" data-width="1000" data-height="700" data-rotation="1.2" data-theme="accent" data-title="Visualization">
+      <div class="frame-head"><span class="frame-num">18 / 20</span><span class="frame-theme">VISUALIZATION</span></div>
+      <h2 class="rv">تبدیل داده خام به Insight</h2>
+      <div class="rv demo-box" data-delay="1">
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px">
+          <div class="demo-card" style="text-align:right"><strong>🔍 جستجوی Event ها</strong><div style="font-size:14px; color:var(--muted); margin-top:4px">فیلتر بر اساس شهر، اپ، شبکه</div></div>
+          <div class="demo-card" style="text-align:right"><strong>📊 Aggregation</strong><div style="font-size:14px; color:var(--muted); margin-top:4px">میانگین، توزیع، Percentile</div></div>
+          <div class="demo-card" style="text-align:right"><strong>📈 Dashboard</strong><div style="font-size:14px; color:var(--muted); margin-top:4px">نمودارهای تعاملی زنده</div></div>
+          <div class="demo-card" style="text-align:right"><strong>🧭 تحلیل الگوها</strong><div style="font-size:14px; color:var(--muted); margin-top:4px">تشخیص افت کیفیت شبکه</div></div>
+        </div>
+        <div style="margin-top:12px; font-size:13px; color:var(--muted)">Top Apps by Event Share — از همان Query صفحه قبل</div>
+        <div style="margin-top:6px; height:110px; background:var(--card2); border-radius:12px; position:relative; overflow:hidden; display:flex; align-items:flex-end; gap:8px; padding:10px 14px">
+          <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%"><span style="font-size:12px; color:var(--muted); margin-bottom:4px">34%</span><div style="width:100%; background:var(--acc); border-radius:6px 6px 0 0; height:100%"></div><span style="font-size:11px; margin-top:4px">Instagram</span></div>
+          <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%"><span style="font-size:12px; color:var(--muted); margin-bottom:4px">27%</span><div style="width:100%; background:var(--acc); border-radius:6px 6px 0 0; height:79%"></div><span style="font-size:11px; margin-top:4px">YouTube</span></div>
+          <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%"><span style="font-size:12px; color:var(--muted); margin-bottom:4px">19%</span><div style="width:100%; background:var(--acc2); border-radius:6px 6px 0 0; height:56%"></div><span style="font-size:11px; margin-top:4px">Telegram</span></div>
+          <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%"><span style="font-size:12px; color:var(--muted); margin-bottom:4px">12%</span><div style="width:100%; background:var(--acc); border-radius:6px 6px 0 0; height:35%"></div><span style="font-size:11px; margin-top:4px">WhatsApp</span></div>
+          <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%"><span style="font-size:12px; color:var(--muted); margin-bottom:4px">8%</span><div style="width:100%; background:var(--line); border-radius:6px 6px 0 0; height:24%"></div><span style="font-size:11px; margin-top:4px">Chrome</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FRAME 19 Learnings -->
+    <section class="frame" data-x="150" data-y="3600" data-width="1050" data-height="750" data-rotation="-1.3" data-theme="dark" data-title="چیزهایی که یاد گرفتم">
+      <div class="frame-head"><span class="frame-num">19 / 20</span><span class="frame-theme">LEARNINGS</span></div>
+      <h2 class="rv">چیزهایی که یاد گرفتم</h2>
+      <div class="rv" data-delay="1" style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:10px">
+        <div class="demo-box"><h3>دانش فنی</h3><ul style="margin-top:8px"><li>معماری OLAP</li><li>دیتابیس‌های Column-Oriented</li><li>MergeTree Engine</li><li>Data Parts & Partitioning</li><li>Query Optimization</li><li>Bulk Ingestion</li></ul></div>
+        <div class="demo-box"><h3>مهارت‌های مهندسی</h3><ul style="margin-top:8px"><li>طراحی Data Pipeline</li><li>Repository Pattern</li><li>معماری نرم‌افزار تمیز</li><li>کار با Dataset حجیم</li><li>تفکر تحلیلی</li><li>Visualization</li></ul></div>
+      </div>
+    </section>
+
+    <!-- FRAME 20 Future -->
+    <section class="frame" data-x="150" data-y="4750" data-width="1100" data-height="750" data-rotation="-0.8" data-theme="dark" data-title="مسیر آینده">
+      <div class="frame-head"><span class="frame-num">20 / 20</span><span class="frame-theme">FUTURE ROADMAP</span></div>
+      <h2 class="rv">مسیر آینده</h2>
+      <div class="rv demo-box" data-delay="1">
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px">
+          <div class="layer"><span>اتصال به داده واقعی مخابراتی</span><span>📡</span></div>
+          <div class="layer"><span>Streaming با Kafka</span><span>🌊</span></div>
+          <div class="layer"><span>Real-time Analytics</span><span>⚡</span></div>
+          <div class="layer"><span>Distributed Cluster</span><span>🖥️</span></div>
+          <div class="layer"><span>Materialized Views</span><span>👁️</span></div>
+          <div class="layer"><span>Monitoring پیشرفته</span><span>📊</span></div>
+        </div>
+        <div style="margin-top:16px; text-align:center">
+          <div style="display:inline-flex; background:linear-gradient(90deg,var(--acc),var(--acc2)); color:white; padding:10px 22px; border-radius:24px; font-weight:700; font-size:14px">سفر یادگیری ادامه دارد...</div>
+          <div style="font-size:15px; color:var(--muted); margin-top:8px">از مفاهیم پایه تا سیستم Production-ready</div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<!-- HUD -->
+<div id="hudTop">
+  <div class="hud-pill"><span style="width:8px; height:8px; background:var(--acc); border-radius:50%; display:inline-block; box-shadow:0 0 8px var(--acc)"></span><span id="currentTitle" style="font-weight:700; font-size:14px">عنوان ارائه</span><span id="frameCounter" style="font-size:15px; color:var(--muted)">0 / 20</span></div>
+  <div class="hud-pill" style="gap:8px"><button class="navBtn" style="width:auto; height:32px; padding:0 12px; font-size:15px; border-radius:20px" id="overviewBtn">نقشه 🗺️ (M)</button><button class="navBtn" style="width:auto; height:32px; padding:0 12px; font-size:15px; border-radius:20px" id="helpBtn">راهنما (H)</button></div>
+</div>
+<div id="hudBottom">
+  <div class="hud-nav"><button class="navBtn" id="prevBtn">‹</button><button class="navBtn" id="nextBtn">›</button></div>
+  <div id="progressDots"></div>
+  <div class="hud-pill" style="font-size:14px; color:var(--muted)">Space/←→ برای حرکت • B سیاه • W سفید • M نقشه</div>
+</div>
+<div id="overviewHint">حالت نقشه — روی هر فریم کلیک کنید تا به آن بروید • Esc برای خروج</div>
+<div id="progressBar"></div>
+<div id="blackout"></div>
+<div id="whiteout"></div>
+<div id="numIndicator"></div>
+<div id="helpOverlay">
+  <div class="help-card">
+    <h2 style="font-size:22px">کنترل‌های ارائه</h2>
+    <p style="font-size:16px; color:var(--muted); margin-top:6px">این ارائه کاملاً با Remote Presenter سازگار است</p>
+    <div class="help-grid">
+      <div class="help-item"><kbd>→</kbd><kbd>↓</kbd><kbd>Space</kbd><span>بعدی</span></div>
+      <div class="help-item"><kbd>←</kbd><kbd>↑</kbd><kbd>P</kbd><span>قبلی</span></div>
+      <div class="help-item"><kbd>Home</kbd><span>اولین فریم</span></div>
+      <div class="help-item"><kbd>End</kbd><span>آخرین فریم</span></div>
+      <div class="help-item"><kbd>B</kbd><kbd>.</kbd><span>صفحه سیاه</span></div>
+      <div class="help-item"><kbd>W</kbd><span>صفحه سفید</span></div>
+      <div class="help-item"><kbd>M</kbd><span>نقشه کلی</span></div>
+      <div class="help-item"><kbd>H</kbd><span>راهنما</span></div>
+      <div class="help-item"><kbd>1..9</kbd><kbd>Enter</kbd><span>پرش به شماره</span></div>
+      <div class="help-item"><kbd>Esc</kbd><span>خروج از حالت</span></div>
+      <div class="help-item"><kbd>F5</kbd><span>شروع مجدد</span></div>
+      <div class="help-item"><kbd>Mouse Wheel / Swipe</kbd><span>حرکت</span></div>
+    </div>
+    <button id="closeHelp" class="navBtn" style="width:100%; margin-top:18px">بستن (Esc)</button>
+  </div>
+</div>
+<div id="layerDetailOverlay" style="position:fixed; inset:0; z-index:250; background:rgba(7,11,20,0.85); backdrop-filter:blur(20px); display:flex; align-items:center; justify-content:center; opacity:0; pointer-events:none; transition:opacity 0.3s">
+  <div class="help-card" style="max-width:560px">
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px">
+      <span id="layerDetailIcon" style="font-size:28px"></span>
+      <h2 id="layerDetailTitle" style="font-size:22px"></h2>
+    </div>
+    <p id="layerDetailDesc" style="font-size:15px; color:var(--muted); margin-bottom:10px"></p>
+    <ul id="layerDetailPoints" style="list-style:none; padding:0"></ul>
+    <button id="closeLayerDetail" class="navBtn" style="width:100%; margin-top:18px">بستن (Esc)</button>
+  </div>
+</div>
+
+<script>
+(function(){
+  const canvas = document.getElementById('canvas');
+  const stage = document.getElementById('stage');
+  const frames = Array.from(document.querySelectorAll('.frame'));
+  const mainPath = document.getElementById('mainPath');
+  const progressPath = document.getElementById('progressPath');
+  const markersG = document.getElementById('markers');
+  const progressDots = document.getElementById('progressDots');
+  const currentTitle = document.getElementById('currentTitle');
+  const frameCounter = document.getElementById('frameCounter');
+  const progressBar = document.getElementById('progressBar');
+  const blackout = document.getElementById('blackout');
+  const whiteout = document.getElementById('whiteout');
+  const helpOverlay = document.getElementById('helpOverlay');
+  const numIndicator = document.getElementById('numIndicator');
+  const overviewHint = document.getElementById('overviewHint');
+
+  let current = 0;
+  let isOverview = false;
+  let isBlackout = false;
+  let isWhiteout = false;
+  let numberBuffer = '';
+  let numberTimeout = null;
+  let lastWheel = 0;
+
+  // Parse frames
+  frames.forEach((f,i)=>{
+    const x = parseFloat(f.dataset.x)||0;
+    const y = parseFloat(f.dataset.y)||0;
+    const w = parseFloat(f.dataset.width)||1000;
+    const h = parseFloat(f.dataset.height)||700;
+    const rot = parseFloat(f.dataset.rotation)||0;
+    f.style.left = x+'px';
+    f.style.top = y+'px';
+    f.style.width = w+'px';
+    f.style.height = h+'px';
+    f.style.setProperty('--w', w+'px');
+    f.style.setProperty('--h', h+'px');
+    f.style.setProperty('--rot', rot+'deg');
+    f._meta = {x,y,w,h,rot,cx:x+w/2, cy:y+h/2};
+    // rv delays
+    f.querySelectorAll('.rv').forEach((el,idx)=>{
+      if(!el.dataset.delay) el.style.transitionDelay = (idx*0.08)+'s';
+      else el.style.transitionDelay = (parseFloat(el.dataset.delay)*0.12)+'s';
+    });
+  });
+
+  // Bokeh
+  const bokehLayer = document.getElementById('bokeh-layer');
+  const colors = ['#7c5cff','#2ef5cc','#ff4ecd','#0ea5e9'];
+  for(let i=0;i<14;i++){
+    const b = document.createElement('div');
+    b.className='bokeh';
+    b.style.left = Math.random()*5100+'px';
+    b.style.top = Math.random()*6200+'px';
+    b.style.width = (120+Math.random()*260)+'px';
+    b.style.height = b.style.width;
+    b.style.background = colors[i%colors.length];
+    b.style.animationDuration = (12+Math.random()*18)+'s';
+    b.style.animationDelay = (Math.random()*10)+'s';
+    bokehLayer.appendChild(b);
+  }
+
+  // Catmull-Rom to Bezier
+  function catmullRomToBezier(points){
+    if(points.length<2) return '';
+    let d = `M ${points[0].x} ${points[0].y}`;
+    for(let i=0;i<points.length-1;i++){
+      const p0 = points[i-1]||points[0];
+      const p1 = points[i];
+      const p2 = points[i+1];
+      const p3 = points[i+2]||p2;
+      const cp1x = p1.x + (p2.x - p0.x)/6;
+      const cp1y = p1.y + (p2.y - p0.y)/6;
+      const cp2x = p2.x - (p3.x - p1.x)/6;
+      const cp2y = p2.y - (p3.y - p1.y)/6;
+      d += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p2.x} ${p2.y}`;
+    }
+    return d;
+  }
+  const centers = frames.map(f=>({x:f._meta.cx, y:f._meta.cy}));
+  const pathD = catmullRomToBezier(centers);
+  mainPath.setAttribute('d', pathD);
+  progressPath.setAttribute('d', pathD);
+  const totalLen = progressPath.getTotalLength();
+  mainPath.style.strokeDasharray = '14 18';
+  progressPath.style.strokeDasharray = totalLen+'';
+  progressPath.style.strokeDashoffset = totalLen+'';
+
+  // Markers
+  frames.forEach((f,i)=>{
+    const g = document.createElementNS('http://www.w3.org/2000/svg','g');
+    g.setAttribute('transform', `translate(${f._meta.cx},${f._meta.cy})`);
+    g.style.cursor='pointer';
+    g.addEventListener('click',()=>{ if(isOverview) goTo(i); });
+    const c = document.createElementNS('http://www.w3.org/2000/svg','circle');
+    c.setAttribute('r','18'); c.setAttribute('class','marker'); c.setAttribute('id','marker-'+i);
+    g.appendChild(c);
+    const t = document.createElementNS('http://www.w3.org/2000/svg','text');
+    t.textContent = i; t.setAttribute('class','marker-text'); t.setAttribute('y','1');
+    g.appendChild(t);
+    markersG.appendChild(g);
+  });
+
+  // Dots
+  frames.forEach((_,i)=>{
+    const d = document.createElement('div');
+    d.className='pdot'; d.dataset.n=i;
+    d.addEventListener('click',()=>goTo(i));
+    progressDots.appendChild(d);
+  });
+
+  function updateHUD(){
+    currentTitle.textContent = frames[current].dataset.title || `فریم ${current}`;
+    frameCounter.textContent = `${current} / ${frames.length-1}`;
+    const pct = (current/(frames.length-1))*100;
+    progressBar.style.width = pct+'%';
+    document.querySelectorAll('.pdot').forEach((d,idx)=>d.classList.toggle('active', idx===current));
+    document.querySelectorAll('.marker').forEach((m,idx)=>m.classList.toggle('active', idx===current));
+    const offset = totalLen - (totalLen * (current/(frames.length-1)));
+    progressPath.style.strokeDashoffset = offset+'';
+  }
+
+  function applyCamera(idx, instant=false){
+    const f = frames[idx]._meta;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const s = Math.min(vw*0.94 / f.w, vh*0.86 / f.h);
+    if(instant) canvas.style.transition='none';
+    else canvas.style.transition='transform 1.3s cubic-bezier(.66,.02,.24,1)';
+    // translate(vw/2, vh/2) rotate(-rot) scale(s) translate(-cx,-cy)
+    canvas.style.transform = `translate(${vw/2}px, ${vh/2}px) rotate(${-f.rot}deg) scale(${s}) translate(${-f.cx}px, ${-f.cy}px)`;
+    if(instant) requestAnimationFrame(()=>{ canvas.style.transition='transform 1.3s cubic-bezier(.66,.02,.24,1)'; });
+  }
+
+  function goTo(idx, instant=false, fromRemote=false){
+    if(idx<0||idx>=frames.length) return;
+    if(idx===current && !isOverview) return;
+    current = idx;
+    frames.forEach((fr,i)=>fr.classList.toggle('active', i===current));
+    document.body.dataset.theme = frames[current].dataset.theme || 'dark';
+    applyCamera(current, instant);
+    updateHUD();
+    if(isOverview) exitOverview();
+    if(!fromRemote) syncBroadcast(idx);
+  }
+
+  function goNext(){ if(current < frames.length-1) goTo(current+1); }
+  function goPrev(){ if(current > 0) goTo(current-1); }
+
+  function setOverview(state, fromRemote=false){
+    if(state) enterOverview(); else exitOverview();
+    if(!fromRemote) sendSync({type:'overview', on: state});
+  }
+  function enterOverview(){
+    isOverview = true;
+    overviewHint.classList.add('on');
+    // fit all frames
+    let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+    frames.forEach(f=>{ minX=Math.min(minX,f._meta.x); minY=Math.min(minY,f._meta.y); maxX=Math.max(maxX,f._meta.x+f._meta.w); maxY=Math.max(maxY,f._meta.y+f._meta.h); });
+    const bw = maxX-minX, bh = maxY-minY;
+    const bcx = minX+bw/2, bcy = minY+bh/2;
+    const vw = window.innerWidth, vh=window.innerHeight;
+    const s = Math.min(vw*0.92 / bw, vh*0.82 / bh) * 0.95;
+    canvas.style.transform = `translate(${vw/2}px, ${vh/2}px) rotate(0deg) scale(${s}) translate(${-bcx}px, ${-bcy}px)`;
+    frames.forEach(f=>f.classList.add('active'));
+  }
+  function exitOverview(){
+    if(!isOverview) return;
+    isOverview=false;
+    overviewHint.classList.remove('on');
+    frames.forEach((f,i)=>f.classList.toggle('active', i===current));
+    applyCamera(current);
+  }
+
+  // Keyboard
+  function showNumber(){
+    numIndicator.textContent = numberBuffer;
+    numIndicator.classList.add('on');
+    clearTimeout(numberTimeout);
+    numberTimeout = setTimeout(()=>{ numIndicator.classList.remove('on'); numberBuffer=''; }, 1800);
+  }
+
+  document.addEventListener('keydown', (e)=>{
+    const tag = document.activeElement.tagName;
+    if(tag==='INPUT'||tag==='TEXTAREA') return;
+    // number handling
+    if(/^[0-9]$/.test(e.key)){
+      numberBuffer += e.key;
+      if(numberBuffer.length>3) numberBuffer = numberBuffer.slice(-3);
+      showNumber();
+      e.preventDefault();
+      return;
+    }
+    if(e.key==='Enter'){
+      if(numberBuffer!==''){
+        const n = parseInt(numberBuffer,10);
+        if(!isNaN(n) && n>=0 && n<frames.length){ goTo(n); }
+        numberBuffer=''; numIndicator.classList.remove('on');
+        e.preventDefault();
+        return;
+      }
+    }
+    switch(e.key){
+      case 'ArrowRight':
+      case 'ArrowDown':
+      case 'PageDown':
+      case ' ':
+      case 'Spacebar':
+      case 'n':
+      case 'N':
+        if(e.key===' '||e.key.startsWith('Arrow')) e.preventDefault();
+        if(isBlackout||isWhiteout) break;
+        if(isOverview){ goTo(current+1); } else goNext();
+        break;
+      case 'ArrowLeft':
+      case 'ArrowUp':
+      case 'PageUp':
+      case 'Backspace':
+      case 'p':
+      case 'P':
+        e.preventDefault();
+        if(isBlackout||isWhiteout) break;
+        if(isOverview){ goTo(Math.max(0,current-1)); } else goPrev();
+        break;
+      case 'b':
+      case 'B':
+      case '.':
+        blackout.classList.toggle('on');
+        isBlackout = blackout.classList.contains('on');
+        if(isBlackout){ whiteout.classList.remove('on'); isWhiteout=false; }
+        break;
+      case 'w':
+      case 'W':
+        whiteout.classList.toggle('on');
+        isWhiteout = whiteout.classList.contains('on');
+        if(isWhiteout){ blackout.classList.remove('on'); isBlackout=false; }
+        break;
+      case 'Home':
+        e.preventDefault(); goTo(0); break;
+      case 'End':
+        e.preventDefault(); goTo(frames.length-1); break;
+      case 'm':
+      case 'M':
+        setOverview(!isOverview);
+        break;
+      case 'h':
+      case 'H':
+        helpOverlay.classList.add('on'); break;
+      case 'Escape':
+        if(blackout.classList.contains('on')||whiteout.classList.contains('on')){ blackout.classList.remove('on'); whiteout.classList.remove('on'); isBlackout=isWhiteout=false; }
+        else if(helpOverlay.classList.contains('on')) helpOverlay.classList.remove('on');
+        else if(isOverview) setOverview(false);
+        else { numberBuffer=''; numIndicator.classList.remove('on'); }
+        break;
+      case 'F5':
+        e.preventDefault(); goTo(0); break;
+    }
+  });
+
+  // Buttons
+  document.getElementById('nextBtn').addEventListener('click', (e)=>{ goNext(); e.currentTarget.blur(); document.activeElement.blur(); });
+  document.getElementById('prevBtn').addEventListener('click', (e)=>{ goPrev(); e.currentTarget.blur(); document.activeElement.blur(); });
+  document.getElementById('overviewBtn').addEventListener('click', (e)=>{ setOverview(!isOverview); e.currentTarget.blur(); });
+  document.getElementById('helpBtn').addEventListener('click', (e)=>{ helpOverlay.classList.add('on'); e.currentTarget.blur(); });
+  document.getElementById('closeHelp').addEventListener('click', (e)=>{ helpOverlay.classList.remove('on'); e.currentTarget.blur(); });
+  helpOverlay.addEventListener('click', (e)=>{ if(e.target===helpOverlay) helpOverlay.classList.remove('on'); });
+
+  // Wheel throttled
+  stage.addEventListener('wheel', (e)=>{
+    const now = Date.now();
+    if(now-lastWheel < 900) return;
+    lastWheel=now;
+    if(e.deltaY>0) goNext(); else goPrev();
+  }, {passive:true});
+
+  // Touch
+  let touchStartX=0, touchStartY=0;
+  stage.addEventListener('touchstart', (e)=>{ touchStartX=e.touches[0].clientX; touchStartY=e.touches[0].clientY; }, {passive:true});
+  stage.addEventListener('touchend', (e)=>{
+    const dx = e.changedTouches[0].clientX - touchStartX;
+    const dy = e.changedTouches[0].clientY - touchStartY;
+    if(Math.abs(dx)>50 || Math.abs(dy)>50){
+      if(dx<0||dy<0) goNext(); else goPrev();
+    }
+  });
+
+  // Click on frames in overview
+  frames.forEach((f,i)=>{ f.addEventListener('click', ()=>{ if(isOverview) goTo(i); }); });
+
+  // Resize
+  window.addEventListener('resize', ()=>{ if(isOverview) enterOverview(); else applyCamera(current,true); });
+
+  // ========== INTERACTIVE DEMOS ==========
+
+  // Demo 2 OLTP vs OLAP animation
+  (function(){
+    const oltp = document.getElementById('oltp-viz');
+    const olap = document.getElementById('olap-viz');
+    if(!oltp) return;
+    function spawnDot(container, color, fast){
+      const d = document.createElement('div');
+      d.style.position='absolute'; d.style.width='6px'; d.style.height='6px';
+      d.style.background=color; d.style.borderRadius='50%';
+      d.style.left = Math.random()*90+'%'; d.style.top='-6px';
+      d.style.boxShadow=`0 0 6px ${color}`;
+      container.appendChild(d);
+      let y=0; const speed = fast? (4+Math.random()*6) : (0.8+Math.random()*1.2);
+      function anim(){
+        y+=speed; d.style.top=y+'px';
+        if(y<110) requestAnimationFrame(anim); else d.remove();
+      }
+      requestAnimationFrame(anim);
+    }
+    function isFrameActive(el){ const fr = el.closest('.frame'); return fr && fr.classList.contains('active'); }
+    setInterval(()=>{ if(document.body.contains(oltp) && isFrameActive(oltp)) spawnDot(oltp,'#ff6b9d',true); }, 90);
+
+    // OLAP: column-scan sweep + running aggregation, matches "scan many rows, aggregate one number"
+    const olapCols = 8;
+    for(let i=0;i<olapCols;i++){
+      const col = document.createElement('div');
+      col.className='olap-col';
+      col.style.cssText = `position:absolute; bottom:0; width:${100/olapCols}%; left:${i*(100/olapCols)}%; background:var(--acc2); opacity:0.18; transition:opacity .2s;`;
+      col.style.height='100%';
+      olap.appendChild(col);
+    }
+    const sweep = document.createElement('div');
+    sweep.style.cssText = 'position:absolute; top:0; bottom:0; width:3px; background:var(--acc2); box-shadow:0 0 10px var(--acc2); left:0;';
+    olap.appendChild(sweep);
+    const aggLabel = document.createElement('div');
+    aggLabel.style.cssText = 'position:absolute; top:6px; left:8px; font-size:13px; font-weight:800; color:var(--acc2); background:var(--card); padding:2px 8px; border-radius:8px;';
+    aggLabel.textContent = 'SUM = 0';
+    olap.appendChild(aggLabel);
+    let sweepPct = 0, aggVal = 0;
+    setInterval(()=>{
+      if(!isFrameActive(olap)) return;
+      sweepPct += 2.5;
+      aggVal += Math.floor(Math.random()*4000);
+      if(sweepPct>100){ sweepPct=0; aggVal=0; olap.querySelectorAll('.olap-col').forEach(c=>c.style.opacity='0.18'); }
+      sweep.style.left = sweepPct+'%';
+      const litIdx = Math.floor(sweepPct/100*olapCols);
+      olap.querySelectorAll('.olap-col').forEach((c,ci)=>{ if(ci===litIdx) c.style.opacity='0.55'; });
+      aggLabel.textContent = 'SUM = '+aggVal.toLocaleString();
+    }, 70);
+  })();
+
+  // Demo 3 Row vs Column
+  (function(){
+    const grid = document.getElementById('storage-grid');
+    const btn = document.getElementById('toggle-storage');
+    const label = document.getElementById('storage-mode-label');
+    const io = document.getElementById('io-result');
+    if(!grid) return;
+    let isCol = false;
+    const data = [
+      {c:'Tehran', d:'Android', n:'5G', l:'40ms'},
+      {c:'Shiraz', d:'iPhone', n:'4G', l:'80ms'},
+      {c:'Tabriz', d:'Android', n:'5G', l:'35ms'},
+    ];
+    function render(){
+      grid.innerHTML='';
+      grid.style.display='flex'; grid.style.flexDirection='column'; grid.style.gap='10px'; grid.style.gridTemplateColumns='';
+      const keys = ['c','d','n','l'];
+      const labels = {c:'City',d:'Device',n:'Net',l:'Latency'};
+      if(!isCol){
+        // row mode: each record written as ONE contiguous physical block on disk
+        data.forEach((row,ri)=>{
+          const fileDiv = document.createElement('div');
+          fileDiv.style.cssText='background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px 10px;';
+          const title = document.createElement('div');
+          title.style.cssText='font-size:12px; color:var(--muted); margin-bottom:6px; direction:ltr; text-align:left';
+          title.textContent = `row_${ri+1}.block  (یک بلاک پیوسته روی دیسک)`;
+          fileDiv.appendChild(title);
+          const seq = document.createElement('div');
+          seq.style.cssText='display:flex; gap:4px; flex-wrap:wrap; direction:ltr';
+          keys.forEach(k=>{
+            const cell=document.createElement('div');
+            cell.className='storage-cell row-highlight';
+            cell.textContent=row[k];
+            seq.appendChild(cell);
+          });
+          fileDiv.appendChild(seq);
+          grid.appendChild(fileDiv);
+        });
+        label.textContent='Row-Oriented'; btn.textContent='تبدیل به ستونی ←';
+        io.textContent='برای این Query باید همه ۴ فایل رکورد باز و خوانده شوند';
+        io.style.background='var(--muted)';
+      } else {
+        // column mode: each column written as its own contiguous file on disk
+        const cols = {c:['Tehran','Shiraz','Tabriz'],d:['Android','iPhone','Android'],n:['5G','4G','5G'],l:['40ms','80ms','35ms']};
+        keys.forEach(k=>{
+          const fileDiv = document.createElement('div');
+          const isTarget = k==='l';
+          fileDiv.style.cssText=`background:var(--card); border:1px solid ${isTarget?'var(--acc)':'var(--line)'}; border-radius:8px; padding:8px 10px;`;
+          const title = document.createElement('div');
+          title.style.cssText=`font-size:12px; margin-bottom:6px; direction:ltr; text-align:left; color:${isTarget?'var(--acc)':'var(--muted)'}`;
+          title.textContent = `${labels[k].toLowerCase()}.bin  ${isTarget?'← فقط همین باز می‌شود':'(فایل جدای این ستون)'}`;
+          fileDiv.appendChild(title);
+          const seq = document.createElement('div');
+          seq.style.cssText='display:flex; gap:4px; flex-wrap:wrap; direction:ltr';
+          cols[k].forEach(v=>{
+            const cell=document.createElement('div');
+            cell.className='storage-cell'; cell.textContent=v;
+            if(isTarget) cell.classList.add('col-highlight');
+            seq.appendChild(cell);
+          });
+          fileDiv.appendChild(seq);
+          grid.appendChild(fileDiv);
+        });
+        label.textContent='Column-Oriented'; btn.textContent='→ برگشت به سطری';
+        io.textContent='فقط فایل latency.bin باز می‌شود — 75% کمتر I/O';
+        io.style.background='var(--acc)';
+      }
+    }
+    btn.addEventListener('click', (e)=>{ isCol=!isCol; render(); e.currentTarget.blur(); });
+    render();
+  })();
+
+  // Demo 5 cascading merge (small parts -> merged -> merged again)
+  (function(){
+    const l1 = document.getElementById('cascade-l1');
+    const l2 = document.getElementById('cascade-l2');
+    const l3 = document.getElementById('cascade-l3');
+    if(!l1) return;
+    function mkPart(label, big){
+      const d = document.createElement('div');
+      d.textContent = label;
+      d.style.cssText = `padding:${big?'14px 20px':'10px 14px'}; border-radius:10px; font-size:${big?'14px':'12px'}; font-weight:700; color:white; background:linear-gradient(135deg,var(--acc),var(--acc2)); opacity:0; transform:scale(0.6); transition:all .6s cubic-bezier(.34,1.56,.64,1);`;
+      return d;
+    }
+    function cycle(){
+      l1.innerHTML=''; l2.innerHTML=''; l3.innerHTML='';
+      const parts=[];
+      for(let i=1;i<=6;i++){ const p=mkPart('Part '+i,false); l1.appendChild(p); parts.push(p); }
+      requestAnimationFrame(()=>parts.forEach(p=>{p.style.opacity='1'; p.style.transform='scale(1)';}));
+      setTimeout(()=>{
+        const m1=mkPart('Merged (1+2+3)',false), m2=mkPart('Merged (4+5+6)',false);
+        l2.appendChild(m1); l2.appendChild(m2);
+        requestAnimationFrame(()=>{ m1.style.opacity='1'; m1.style.transform='scale(1)'; m2.style.opacity='1'; m2.style.transform='scale(1)'; });
+        l1.querySelectorAll('div').forEach(p=>{p.style.opacity='0.15';});
+      }, 1400);
+      setTimeout(()=>{
+        const big=mkPart('Big Merged Part (کل 6 Part)',true);
+        l3.appendChild(big);
+        requestAnimationFrame(()=>{ big.style.opacity='1'; big.style.transform='scale(1)'; });
+        l2.querySelectorAll('div').forEach(p=>{p.style.opacity='0.15';});
+      }, 2800);
+      setTimeout(cycle, 5200);
+    }
+    cycle();
+  })();
+
+  // Demo 7 parts merge
+  (function(){
+    const cont = document.getElementById('parts-container');
+    const btn = document.getElementById('merge-btn');
+    const stats = document.getElementById('merge-stats');
+    if(!cont) return;
+    let parts = [];
+    function reset(){
+      cont.innerHTML=''; parts=[];
+      for(let i=1;i<=3;i++){
+        const p=document.createElement('div'); p.className='part'; p.textContent='Part '+i;
+        p.style.background = i===1?'#1e2a4a': i===2?'#1a2f3a':'#2a1e4a';
+        p.style.color='var(--fg)';
+        cont.appendChild(p); parts.push(p);
+      }
+      stats.textContent='3 Part جدا — هر Insert یک Part جدید';
+    }
+    function merge(){
+      parts.forEach(p=>p.classList.add('merging'));
+      setTimeout(()=>{
+        cont.innerHTML='';
+        const m=document.createElement('div'); m.className='part merged'; m.textContent='Merged Part (3 → 1) — Optimized';
+        cont.appendChild(m);
+        stats.textContent='✅ Merge موفق — خواندن سریع‌تر، Storage بهینه‌تر';
+        setTimeout(reset, 3200);
+      }, 700);
+    }
+    btn.addEventListener('click', (e)=>{ merge(); e.currentTarget.blur(); });
+    reset();
+  })();
+
+  // Demo 10 partitions
+  (function(){
+    const wrap = document.getElementById('partitions');
+    const prunedBar = document.getElementById('scan-pruned');
+    const scanText = document.getElementById('scan-text');
+    if(!wrap) return;
+    const months = ['2024-01','2024-02','2024-03','2024-04','2024-05','2024-06','2024-07','2024-08','2024-09','2024-10','2024-11','2024-12'];
+    const totalRows = 12.4; // billion, matches "بدون Partition" card
+    const rowsPerMonth = totalRows / months.length; // ≈1.03B, real fixed value not random
+    const pct = (rowsPerMonth/totalRows*100); // ≈8.3%
+    months.forEach((m,i)=>{
+      const el=document.createElement('div'); el.className='partition';
+      el.innerHTML=`<strong>${m.split('-')[1]}</strong><span>${m}</span>`;
+      el.addEventListener('click', (e)=>{
+        // single-select: clear all, activate only this one
+        wrap.querySelectorAll('.partition').forEach(p=>p.classList.remove('active','scanned'));
+        el.classList.add('active');
+        prunedBar.style.width = pct.toFixed(1)+'%';
+        scanText.textContent = `1 ماه (${m}) Scan = ${rowsPerMonth.toFixed(2)}B rows (${(100-pct).toFixed(0)}% کاهش نسبت به کل)`;
+        e.currentTarget.blur();
+      });
+      wrap.appendChild(el);
+    });
+  })();
+
+  // Demo 12 architecture layers
+  (function(){
+    const wrap = document.getElementById('arch-layers');
+    if(!wrap) return;
+    const layers = [
+      {name:'Interactive CLI (main.py)', desc:'ورودی کاربر — ۲۰+ دستور', icon:'🖥️', color:'var(--acc)',
+        points:['دستورات کاربر را می‌گیرد و به Repository، Analytics یا PartitionManager می‌فرستد','دستورات جداگانه برای CRUD، تحلیل و مدیریت Partition (مثل top_apps، partition_status)']},
+      {name:'Repository & Analytics Layer', desc:'NetworkEventRepository + NetworkEventAnalytics', icon:'📊', color:'#ff4ecd',
+        points:['Repository: عملیات CRUD، فیلتر و صفحه‌بندی روی network_events','Analytics: Query های BI مثل top_apps، top_cities، network_quality — از الگوی Repository Pattern استفاده می‌کند']},
+      {name:'ClickHouseClient', desc:'مدیریت اتصال (Singleton)', icon:'🔌', color:'var(--acc2)',
+        points:['یک اتصال واحد به ClickHouse با مدیریت Connection/Query Timeout','تنظیمات آن از config.py (Host، Port، Database) خوانده می‌شود']},
+      {name:'ClickHouse Database', desc:'MergeTree، ذخیره ستونی، Partition', icon:'🗄️', color:'var(--acc)',
+        points:['جدول network_events با PARTITION BY toYYYYMM(event_time) و ORDER BY(event_time,user_id)','Partition Pruning برای Query سریع‌تر و جدول network_events_backup برای پشتیبان']},
+      {name:'Data Generator (generate_data.py)', desc:'تولید داده مصنوعی با Faker', icon:'🎲', color:'var(--acc2)',
+        points:['مسیر جدا از CLI — مستقیماً با Batch های ۵۰,۰۰۰ ردیفی در ClickHouse می‌نویسد','سرعت درج ~۶۰,۰۰۰ ردیف/ثانیه؛ توزیع شهر، شبکه و اپلیکیشن را از faker_mappings می‌خواند']},
+    ];
+    const detailOverlay = document.getElementById('layerDetailOverlay');
+    const detailIcon = document.getElementById('layerDetailIcon');
+    const detailTitle = document.getElementById('layerDetailTitle');
+    const detailDesc = document.getElementById('layerDetailDesc');
+    const detailPoints = document.getElementById('layerDetailPoints');
+    function openLayerDetail(l){
+      detailIcon.textContent = l.icon;
+      detailTitle.textContent = l.name;
+      detailDesc.textContent = l.desc;
+      detailPoints.innerHTML = l.points.map(p=>`<li style="padding:6px 0; display:flex; gap:8px"><span style="color:var(--acc)">●</span>${p}</li>`).join('');
+      detailOverlay.style.opacity='1'; detailOverlay.style.pointerEvents='auto';
+    }
+    function closeLayerDetail(){ detailOverlay.style.opacity='0'; detailOverlay.style.pointerEvents='none'; }
+    document.getElementById('closeLayerDetail').addEventListener('click', closeLayerDetail);
+    detailOverlay.addEventListener('click', (e)=>{ if(e.target===detailOverlay) closeLayerDetail(); });
+    document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') closeLayerDetail(); });
+
+    layers.forEach((l,i)=>{
+      const div=document.createElement('div');
+      div.className='layer'; div.style.borderRight=`4px solid ${l.color}`; div.style.pointerEvents='auto'; div.style.cursor='pointer';
+      div.innerHTML=`<div style="display:flex; gap:10px; align-items:center"><span style="font-size:18px">${l.icon}</span><div><div style="font-weight:700; font-size:16px">${l.name}</div><div style="font-size:14px; color:var(--muted)">${l.desc}</div></div></div><span style="font-size:14px; color:var(--muted)">${i+1}</span>`;
+      div.addEventListener('click', (e)=>{ openLayerDetail(l); e.currentTarget.blur(); });
+      div.addEventListener('mouseenter', ()=>{ div.style.transform='translateX(-8px)'; });
+      div.addEventListener('mouseleave', ()=>{ div.style.transform=''; });
+      wrap.appendChild(div);
+      if(i<layers.length-1){
+        const arrow=document.createElement('div'); arrow.style.textAlign='center'; arrow.style.color='var(--muted)'; arrow.style.fontSize='15px'; arrow.textContent='↓'; wrap.appendChild(arrow);
+      }
+    });
+  })();
+
+  // Demo 16 soft layers
+  (function(){
+    const wrap=document.getElementById('soft-layers');
+    if(!wrap) return;
+    const layers=['CLI','Analytics Layer','Repository Layer','ClickHouse Client','Database'];
+    layers.forEach((name,i)=>{
+      const d=document.createElement('div');
+      d.style.width=(260 - i*18)+'px'; d.style.padding='10px 14px'; d.style.borderRadius='12px';
+      d.style.background = i===0?'var(--acc)': i===4?'var(--card2)':'var(--card)';
+      d.style.color = i===0?'white':'var(--fg)'; d.style.border='1px solid var(--line)';
+      d.style.fontWeight='700'; d.style.fontSize='13px'; d.textContent=name;
+      d.style.boxShadow='0 6px 16px var(--shadow)';
+      wrap.appendChild(d);
+      if(i<layers.length-1){
+        const line=document.createElement('div'); line.style.width='2px'; line.style.height='14px'; line.style.background='var(--line)'; wrap.appendChild(line);
+      }
+    });
+  })();
+
+  // Synthetic log
+  (function(){
+    const log=document.getElementById('synthetic-log');
+    const btn=document.getElementById('gen-data');
+    if(!log) return;
+    const cities=['Tehran','Shiraz','Isfahan','Tabriz','Mashhad'];
+    const apps=['Instagram','YouTube','Telegram','WhatsApp','Chrome'];
+    const nets=['3G','4G_LTE','5G','WiFi'];
+    const eventTypes=['CALL_START','CALL_END','DATA_SESSION','SMS_SENT','APP_LAUNCH'];
+    const devices=['Android','iPhone','Desktop'];
+    function gen(){
+      log.innerHTML='';
+      for(let i=0;i<12;i++){
+        const userId = 100000 + Math.floor(Math.random()*899999);
+        const latency = 20+Math.floor(Math.random()*80);
+        const downloadSpeed = (Math.random()*95+5).toFixed(1);
+        const packetLoss = (Math.random()*5).toFixed(2);
+        const line=`event_time=${new Date().toISOString()} | user_id=${userId} | event_type=${eventTypes[Math.floor(Math.random()*eventTypes.length)]} | country=Iran | city=${cities[Math.floor(Math.random()*cities.length)]} | device=${devices[Math.floor(Math.random()*devices.length)]} | network_type=${nets[Math.floor(Math.random()*nets.length)]} | app_name=${apps[Math.floor(Math.random()*apps.length)]} | latency_ms=${latency} | download_speed=${downloadSpeed}Mbps | packet_loss=${packetLoss}%`;
+        const div=document.createElement('div'); div.textContent=line; div.style.opacity='0'; div.style.transform='translateX(10px)'; div.style.transition=`all 0.3s ${i*0.05}s`; log.appendChild(div);
+        requestAnimationFrame(()=>{ div.style.opacity='1'; div.style.transform='translateX(0)'; });
+      }
+    }
+    log.innerHTML = '<div style="color:var(--muted)">برای تولید داده روی دکمه بزنید...</div>';
+    btn.addEventListener('click',(e)=>{ gen(); e.currentTarget.blur(); });
+  })();
+
+  // ===== Leader/Follower Sync =====
+  const params = new URLSearchParams(location.search);
+  const isLeader = params.get('leader') === '1';
+  let ws = null, wsReady = false;
+  const syncBadge = document.createElement('div');
+  syncBadge.style.cssText = 'position:fixed; top:64px; left:22px; z-index:150; font-size:12px; padding:6px 12px; border-radius:16px; font-weight:700; pointer-events:none; transition:all .3s;';
+  document.body.appendChild(syncBadge);
+  function setBadge(text, bg){ syncBadge.textContent = text; syncBadge.style.background = bg; syncBadge.style.color = '#fff'; }
+  function connectSync(){
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${proto}://${location.host}/ws`);
+    ws.onopen = ()=>{ wsReady = true; setBadge(isLeader ? '🟢 Leader' : '🔵 دنبال‌کننده', isLeader ? '#16a34a' : '#2563eb'); };
+    ws.onclose = ()=>{ wsReady = false; setBadge('⚪ قطع — تلاش مجدد...', '#6b7280'); setTimeout(connectSync, 1500); };
+    ws.onerror = ()=>{ ws.close(); };
+    ws.onmessage = (ev)=>{
+      try{
+        const data = JSON.parse(ev.data);
+        if(data.type==='slide' && typeof data.idx==='number'){ goTo(data.idx, false, true); }
+        else if(data.type==='overview' && typeof data.on==='boolean'){ setOverview(data.on, true); }
+      }catch(e){}
+    };
+  }
+  function sendSync(msg){
+    if(isLeader && wsReady){ ws.send(JSON.stringify(msg)); }
+  }
+  function syncBroadcast(idx){ sendSync({type:'slide', idx}); }
+  connectSync();
+  // ===== End Sync =====
+
+  // Init
+  goTo(0,true);
+  setTimeout(()=>{ frames[0].classList.add('active'); },100);
+})();
+</script>
+</body>
+</html>
